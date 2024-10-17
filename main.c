@@ -2,6 +2,7 @@
 #include <float.h>
 #include <raylib.h>
 #include <raymath.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -20,7 +21,7 @@
     (da)->items[(da)->count++] = (item);                                       \
   } while (0)
 
-#define K 4
+#define K 8
 
 typedef struct {
   Color key;
@@ -40,13 +41,22 @@ Vector3 centroids[K] = {0};
 
 void generate_centroids(double cluster_radius) {
   for (int i = 0; i < K; i++) {
-    Vector3 new_centroid = {
-        .x = Lerp(-cluster_radius, cluster_radius, rand_float()),
-        .y = Lerp(-cluster_radius, cluster_radius, rand_float()),
-        .z = Lerp(-cluster_radius, cluster_radius, rand_float()),
-    };
+    if (clusters[i].count > 0) {
+      centroids[i] = Vector3Zero();
+      for (size_t j = 0; j < clusters[i].count; ++j) {
+        centroids[i] = Vector3Add(centroids[i], clusters[i].items[j]);
+      }
 
-    centroids[i] = new_centroid;
+      centroids[i] =
+          Vector3Scale(centroids[i], (1.0f / (float)clusters[i].count));
+    } else {
+      Vector3 new_centroid = {
+          .x = Lerp(-cluster_radius, cluster_radius, rand_float()),
+          .y = Lerp(-cluster_radius, cluster_radius, rand_float()),
+          .z = Lerp(-cluster_radius, cluster_radius, rand_float()),
+      };
+      centroids[i] = new_centroid;
+    }
   }
 }
 
@@ -72,6 +82,28 @@ void recluster_state() {
   }
 }
 
+int cluster_of_color(Color c, int cluster_radius) {
+  int k = -1;
+  float min_distance = FLT_MAX;
+
+  Vector3 sample = {
+      .x = c.r / 255.0f * cluster_radius,
+      .y = c.g / 255.0f * cluster_radius,
+      .z = c.b / 255.0f * cluster_radius,
+  };
+
+  for (size_t j = 0; j < K; j++) {
+    Vector3 centroid = centroids[j];
+    float dist = Vector3LengthSqr(Vector3Subtract(sample, centroid));
+    if (dist < min_distance) {
+      min_distance = dist;
+      k = j;
+    }
+  }
+
+  return k;
+}
+
 int main() {
   srand(time(NULL));
 
@@ -83,9 +115,10 @@ int main() {
   Image img = LoadImage("./images/Lena_512.png");
   ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
   Color *pixels = img.data;
+  size_t pixels_count = img.width * img.height;
 
   ColorPoint *unique_colors = NULL;
-  for (int i = 0; i < img.width * img.height; i++) {
+  for (int i = 0; i < pixels_count; i++) {
     Color c = pixels[i];
     if (hmgeti(unique_colors, c) < 0) {
       hmputs(unique_colors, (ColorPoint){c});
@@ -131,6 +164,24 @@ int main() {
       generate_centroids(cluster_radius);
       recluster_state();
     }
+    if (IsKeyPressed(KEY_ONE)) {
+      for (size_t i = 0; i < pixels_count; i++) {
+        int j = cluster_of_color(pixels[i], cluster_radius);
+        if (j < 0) {
+          fprintf(stderr, "ERROR: Color outside of cluster\n");
+          exit(EXIT_FAILURE);
+        }
+
+        pixels[i] = (Color){
+            .r = centroids[j].x * 255.0f / cluster_radius,
+            .g = centroids[j].y * 255.0f / cluster_radius,
+            .b = centroids[j].z * 255.0f / cluster_radius,
+            .a = 255,
+        };
+      }
+
+      ExportImage(img, "Output.png");
+    }
 
     BeginDrawing();
     ClearBackground(BLACK);
@@ -148,8 +199,8 @@ int main() {
 
       ColorSamples cluster = clusters[i];
       for (size_t j = 0; j < cluster.count; j++) {
-          Vector3 c = cluster.items[j];
-          DrawCube(c, 1, 1, 1, mean_color);
+        Vector3 c = cluster.items[j];
+        DrawCube(c, 1, 1, 1, mean_color);
       }
     }
     EndMode3D();
